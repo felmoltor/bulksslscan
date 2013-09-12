@@ -104,7 +104,7 @@ for ip in `cat $IP_FILE`
 do
     echo 
 	echo "Scanning $ip ($cont/$total_ips). Please wait..."
-	# sslscan --no-failed --xml=results/$ip.out.xml $ip > /dev/null
+	sslscan --no-failed --xml=results/$ip.out.xml $ip > /dev/null
 	# Seach for cipher protocols accepted
 	ciphers=$(grep '<cipher status="accepted" sslversion="' results/$ip.out.xml | cut -f5 -d' ' | cut -f2 -d= | tr -d '"' | sort -u )
     smalestkeylen=$(grep "<cipher status=\"accepted\" sslversion=\"" results/$ip.out.xml | cut -f6 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u --numeric-sort | head -n1)
