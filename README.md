@@ -8,11 +8,11 @@ It checks for the following basic security configuration on the server:
 * MAC signed with MD5
 * CBC ciphers with SSLv3 or TLSv1
 
-*Usage*
+**Usage**
 
-./bulksslscan <ip_list_file> [<output_file.csv>]
+./bulksslscan < ip_list_file > [< output_file.csv >]
 
-*Results*
+**Results**
 
 The script shows a colored output for each inspected IP and configuration checked.
 - Green is good...
