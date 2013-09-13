@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Author: Felipe Molina
+# Author: Felipe Molina (@felmoltor)
 # Date: 05/09/2013
 # Summary: Get a list of IPs and check for:
 #	* Minimum Key Lenght
@@ -14,6 +14,8 @@ NORMAL=$(tput sgr0)
 GREEN=$(tput setaf 2; tput bold)
 YELLOW=$(tput setaf 3)
 RED=$(tput setaf 1)
+
+FORCE_SCAN=0 # If there is already a result file for this IP, scan it again
 
 #############
 # FUNCTIONS #
@@ -50,8 +52,9 @@ function hasMinimumLength()
     fi
 }
 
-function searchCBCMethod(){
-    cbc_enabled=0
+function searchCBCMethod()
+{
+    local cbc_enabled=0
     for method in $@
     do
         IFS="-"
@@ -67,11 +70,39 @@ function searchCBCMethod(){
     return $cbc_enabled
 }
 
+function searchMD5Algorithms() 
+{
+    local md5_mac=0
+    for method in $@
+    do
+        IFS="-"
+        for chunk in $method
+        do
+            if [[ $chunk == "MD5" ]]
+            then
+                md5_mac=1
+            fi
+        done
+        unset IFS
+    done
+    return $md5_mac
+   
+}
+
+function isCommandAvailable {
+    type -P $1 >/dev/null 2>&1 || { echo >&2 "Program '$1' is not installed. Please install it before executing this script"; exit 1; }
+    return 0
+}
+
 ###################
 
 ##########
 ## MAIN ##
 ##########
+
+isCommandAvailable "sslscan"
+isCommandAvailable "cut"
+isCommandAvailable "grep"
 
 # ARG 1
 if [[ -f $1 ]]
@@ -98,13 +129,23 @@ cont=1
 beast_cbc=0
 
 
-echo "IP;Key Len (>= 128 bits);SSLv2 Disabled;CBC Disabled (SSLv3,TLSv1)" > $OUTPUT_FILE
+echo "IP;Key Len (>= 128 bits);SSLv2 Disabled;CBC Disabled (SSLv3,TLSv1);MD5 based MAC" > $OUTPUT_FILE
 
 for ip in `cat $IP_FILE`
 do
     echo 
 	echo "Scanning $ip ($cont/$total_ips). Please wait..."
-	sslscan --no-failed --xml=results/$ip.out.xml $ip > /dev/null
+    if [[ -f results/$ip.out.xml ]]
+    then
+        if [[ $FORCE_SCAN == 1 ]]
+        then
+            sslscan --no-failed --xml=results/$ip.out.xml $ip > /dev/null
+        else
+            echo "$ip has been previously scaned. Skipping this scan now."
+        fi
+    else
+        sslscan --no-failed --xml=results/$ip.out.xml $ip > /dev/null
+    fi
 	# Seach for cipher protocols accepted
 	ciphers=$(grep '<cipher status="accepted" sslversion="' results/$ip.out.xml | cut -f5 -d' ' | cut -f2 -d= | tr -d '"' | sort -u )
     smalestkeylen=$(grep "<cipher status=\"accepted\" sslversion=\"" results/$ip.out.xml | cut -f6 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u --numeric-sort | head -n1)
@@ -112,8 +153,8 @@ do
 	# For each cipher, show the smaller key length accepted by the server
 	for cipher in $ciphers
 	do
-		# echo -n "Smaller key lengt for cipher '$cipher': "
-		# grep "<cipher status=\"accepted\" sslversion=\"$cipher" results/$ip.out.xml | cut -f6 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u --numeric-sort | head -n1
+		echo -n " Smaller key lengt for cipher '$cipher': "
+		grep "<cipher status=\"accepted\" sslversion=\"$cipher" results/$ip.out.xml | cut -f6 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u --numeric-sort | head -n1
         methods=$(grep "<cipher status=\"accepted\" sslversion=\"$cipher" results/$ip.out.xml | cut -f7 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u)
         # If is TLSV1 or SSLv3 we shouldnt accept CBC ciphers
         if [[ ($cipher == "SSLv3") || ($cipher == "TLSv1") ]]
@@ -155,10 +196,21 @@ do
         green "This host is protected against BEAST (Does not use CBC with TLSv1 or SSLv3)"
         beast_status="OK"
     fi
-	
+
+    searchMD5Algorithms $methods
+    weakMACAlgorithm=$?
+    if [[ $weakMACAlgorithm == 1 ]]
+    then
+        red "This host has a weak MAC algorithm (Using MD5)"
+        md5_mac_status="FAIL"
+    else
+        green "This hosts hasn't a weak MAC algorithm (Not using MD5)"
+        md5_mac_status="OK"
+    fi
+
     cont=$(( cont+1 ))
 
-    echo "$ip;$min_len_status;$sslv2_status;$beast_status" >> $OUTPUT_FILE
+    echo "$ip;$min_len_status;$sslv2_status;$beast_status;$md5_mac_status" >> $OUTPUT_FILE
 done
 
 
