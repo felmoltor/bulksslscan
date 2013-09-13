@@ -3,8 +3,12 @@
 # Author: Felipe Molina (@felmoltor)
 # Date: 05/09/2013
 # Summary: Get a list of IPs and check for:
-#	* Minimum Key Lenght
-#	* Cypher suites accepted
+#	* Minimum Key Lenght accepted by the server (>= 128 bits)
+#	* SSLv2 accepted
+#   * MAC signed with MD5
+#   * CBC ciphers with SSLv3 or TLSv1
+
+# TODO: Set a timeout for sslscan to complete
 
 ###########
 # GLOBALS #
@@ -16,6 +20,7 @@ YELLOW=$(tput setaf 3)
 RED=$(tput setaf 1)
 
 FORCE_SCAN=0 # If there is already a result file for this IP, scan it again
+RESULTS_DIR="results"
 
 #############
 # FUNCTIONS #
@@ -104,6 +109,12 @@ isCommandAvailable "sslscan"
 isCommandAvailable "cut"
 isCommandAvailable "grep"
 
+# Crea directorio de resultados si no existe ya
+if [[ ! -d $RESULTS_DIR ]]
+then
+    mkdir -p $RESULTS_DIR
+fi
+
 # ARG 1
 if [[ -f $1 ]]
 then
@@ -135,27 +146,27 @@ for ip in `cat $IP_FILE`
 do
     echo 
 	echo "Scanning $ip ($cont/$total_ips). Please wait..."
-    if [[ -f results/$ip.out.xml ]]
+    if [[ -f $RESULTS_DIR/$ip.out.xml ]]
     then
         if [[ $FORCE_SCAN == 1 ]]
         then
-            sslscan --no-failed --xml=results/$ip.out.xml $ip > /dev/null
+            sslscan --no-failed --xml=$RESULTS_DIR/$ip.out.xml $ip > /dev/null
         else
             echo "$ip has been previously scaned. Skipping this scan now."
         fi
     else
-        sslscan --no-failed --xml=results/$ip.out.xml $ip > /dev/null
+        sslscan --no-failed --xml=$RESULTS_DIR/$ip.out.xml $ip > /dev/null
     fi
 	# Seach for cipher protocols accepted
-	ciphers=$(grep '<cipher status="accepted" sslversion="' results/$ip.out.xml | cut -f5 -d' ' | cut -f2 -d= | tr -d '"' | sort -u )
-    smalestkeylen=$(grep "<cipher status=\"accepted\" sslversion=\"" results/$ip.out.xml | cut -f6 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u --numeric-sort | head -n1)
+	ciphers=$(grep '<cipher status="accepted" sslversion="' $RESULTS_DIR/$ip.out.xml | cut -f5 -d' ' | cut -f2 -d= | tr -d '"' | sort -u )
+    smalestkeylen=$(grep "<cipher status=\"accepted\" sslversion=\"" $RESULTS_DIR/$ip.out.xml | cut -f6 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u --numeric-sort | head -n1)
 
 	# For each cipher, show the smaller key length accepted by the server
 	for cipher in $ciphers
 	do
 		echo -n " Smaller key lengt for cipher '$cipher': "
-		grep "<cipher status=\"accepted\" sslversion=\"$cipher" results/$ip.out.xml | cut -f6 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u --numeric-sort | head -n1
-        methods=$(grep "<cipher status=\"accepted\" sslversion=\"$cipher" results/$ip.out.xml | cut -f7 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u)
+		grep "<cipher status=\"accepted\" sslversion=\"$cipher" $RESULTS_DIR/$ip.out.xml | cut -f6 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u --numeric-sort | head -n1
+        methods=$(grep "<cipher status=\"accepted\" sslversion=\"$cipher" $RESULTS_DIR/$ip.out.xml | cut -f7 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u)
         # If is TLSV1 or SSLv3 we shouldnt accept CBC ciphers
         if [[ ($cipher == "SSLv3") || ($cipher == "TLSv1") ]]
         then
