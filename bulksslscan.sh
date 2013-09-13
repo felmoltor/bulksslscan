@@ -140,7 +140,7 @@ cont=1
 beast_cbc=0
 
 
-echo "IP;Key Len (>= 128 bits);SSLv2 Disabled;CBC Disabled (SSLv3,TLSv1);MD5 based MAC" > $OUTPUT_FILE
+echo "IP;Key Len (>= 128 bits);SSLv2 Disabled;CBC Disabled (SSLv3,v2,TLSv1);MD5 based MAC" > $OUTPUT_FILE
 
 for ip in `cat $IP_FILE`
 do
@@ -168,7 +168,7 @@ do
 		grep "<cipher status=\"accepted\" sslversion=\"$cipher" $RESULTS_DIR/$ip.out.xml | cut -f6 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u --numeric-sort | head -n1
         methods=$(grep "<cipher status=\"accepted\" sslversion=\"$cipher" $RESULTS_DIR/$ip.out.xml | cut -f7 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u)
         # If is TLSV1 or SSLv3 we shouldnt accept CBC ciphers
-        if [[ ($cipher == "SSLv3") || ($cipher == "TLSv1") ]]
+        if [[ ($cipher == "SSLv3") || ($cipher == "TLSv1") || ($cipher == "SSLv2") ]]
         then
             searchCBCMethod $methods
             beast_cbc=$? 
@@ -201,10 +201,10 @@ do
 
     if [[ $beast_cbc == 1 ]]
     then
-        red "This host is not protected against BEAST (Uses CBC with TLSv1 or SSLv3)"
+        red "This host is not protected against BEAST (Uses CBC with TLSv1 or SSLv2,v3)"
         beast_status="FAIL"
     else
-        green "This host is protected against BEAST (Does not use CBC with TLSv1 or SSLv3)"
+        green "This host is protected against BEAST (Does not use CBC with TLSv1 or SSLv2,v3)"
         beast_status="OK"
     fi
 
