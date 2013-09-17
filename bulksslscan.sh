@@ -21,6 +21,7 @@ RED=$(tput setaf 1)
 
 FORCE_SCAN=0 # If there is already a result file for this IP, scan it again
 RESULTS_DIR="results"
+PING_FIRST=0 # TODO: Ping the IP before sslscan, but only if there is no previous file output of sslscan
 
 #############
 # FUNCTIONS #
@@ -65,7 +66,7 @@ function searchCBCMethod()
         IFS="-"
         for chunk in $method
         do
-            if [[ $chunk == "CBC" ]]
+            if [[ ($chunk == "CBC") || ($chunk == "CBC3") ]]
             then
                 cbc_enabled=1
             fi
@@ -99,6 +100,19 @@ function isCommandAvailable {
     return 0
 }
 
+function isHostAvailable {
+    local available
+    available=0
+    packetLoss=$(ping -c 3 $1 | tail -n2 | head -n1 | awk -F, '{print $3}' | tr -d ' ')
+
+    if [[ $packetLoss == "0%" ]]
+    then
+        available=1
+    fi
+
+    return $available
+}
+
 ###################
 
 ##########
@@ -106,6 +120,7 @@ function isCommandAvailable {
 ##########
 
 isCommandAvailable "sslscan"
+#isCommandAvailable "timeout"
 isCommandAvailable "cut"
 isCommandAvailable "grep"
 
@@ -142,86 +157,109 @@ beast_cbc=0
 
 echo "IP;Key Len (>= 128 bits);SSLv2 Disabled;CBC Disabled (SSLv3,v2,TLSv1);MD5 based MAC" > $OUTPUT_FILE
 
-for ip in `cat $IP_FILE`
+for ip in `cat $IP_FILE | tr -d ' '`
 do
     echo 
 	echo "Scanning $ip ($cont/$total_ips). Please wait..."
-    if [[ -f $RESULTS_DIR/$ip.out.xml ]]
+    # If this is not a commentary with a '#'
+    if [[ ${ip:0:1} != "#" ]]
     then
-        if [[ $FORCE_SCAN == 1 ]]
+        #if [[ -f $RESULTS_DIR/$ip.out.xml ]]
+        # then
+        #    hostAvailable=1
+            # Check if is available by pinging this IP
+        #    if [[ $PING_FIST == 1 ]]
+        #    then
+        #        ip_only=$(echo $ip | sed 's/:.*//g')
+        #        echo "Pinging to $ip_only. Please wait..."
+        #        hostAvailable=$(isHostAvailable $ip_only)
+        #    fi
+
+        if [[ -f $RESULTS_DIR/$ip.out.xml ]]
         then
-            sslscan --no-failed --xml=$RESULTS_DIR/$ip.out.xml $ip > /dev/null
+            if [[ $FORCE_SCAN == 1 ]]
+            then
+                sslscan --no-failed --xml=$RESULTS_DIR/$ip.out.xml $ip > /dev/null
+            else
+                echo "$ip has been previously scaned. Skipping this scan now."
+            fi
         else
-            echo "$ip has been previously scaned. Skipping this scan now."
+            sslscan --no-failed --xml=$RESULTS_DIR/$ip.out.xml $ip > /dev/null
         fi
-    else
-        sslscan --no-failed --xml=$RESULTS_DIR/$ip.out.xml $ip > /dev/null
-    fi
-	# Seach for cipher protocols accepted
-	ciphers=$(grep '<cipher status="accepted" sslversion="' $RESULTS_DIR/$ip.out.xml | cut -f5 -d' ' | cut -f2 -d= | tr -d '"' | sort -u )
-    smalestkeylen=$(grep "<cipher status=\"accepted\" sslversion=\"" $RESULTS_DIR/$ip.out.xml | cut -f6 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u --numeric-sort | head -n1)
+        
+        # Seach for cipher protocols accepted
+        ciphers=$(grep '<cipher status="accepted" sslversion="' $RESULTS_DIR/$ip.out.xml | cut -f5 -d' ' | cut -f2 -d= | tr -d '"' | sort -u )
+        smalestkeylen=$(grep "<cipher status=\"accepted\" sslversion=\"" $RESULTS_DIR/$ip.out.xml | cut -f6 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u --numeric-sort | head -n1)
 
-	# For each cipher, show the smaller key length accepted by the server
-	for cipher in $ciphers
-	do
-		echo -n " Smaller key lengt for cipher '$cipher': "
-		grep "<cipher status=\"accepted\" sslversion=\"$cipher" $RESULTS_DIR/$ip.out.xml | cut -f6 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u --numeric-sort | head -n1
-        methods=$(grep "<cipher status=\"accepted\" sslversion=\"$cipher" $RESULTS_DIR/$ip.out.xml | cut -f7 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u)
-        # If is TLSV1 or SSLv3 we shouldnt accept CBC ciphers
-        if [[ ($cipher == "SSLv3") || ($cipher == "TLSv1") || ($cipher == "SSLv2") ]]
+        # For each cipher, show the smaller key length accepted by the server
+        for cipher in $ciphers
+        do
+            echo -n " Smaller key lengt for cipher '$cipher': "
+            grep "<cipher status=\"accepted\" sslversion=\"$cipher" $RESULTS_DIR/$ip.out.xml | cut -f6 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u --numeric-sort | head -n1
+            methods=$(grep "<cipher status=\"accepted\" sslversion=\"$cipher" $RESULTS_DIR/$ip.out.xml | cut -f7 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u)
+            # If is TLSV1 or SSLv3 we shouldnt accept CBC ciphers
+            if [[ ($cipher == "SSLv3") || ($cipher == "TLSv1") || ($cipher == "SSLv2") ]]
+            then
+                searchCBCMethod $methods
+                beast_cbc=$? 
+            fi
+        done
+        
+        # Is SSLv2 enabled?
+        containsElement "SSLv2" $ciphers
+        hasSSLv2=$?
+        if [[ $hasSSLv2 == 1 ]]
         then
-            searchCBCMethod $methods
-            beast_cbc=$? 
+            red "SSLv2 detected"
+            sslv2_status="FAIL"
+        else
+            green "SSLv2 was not detected"
+            sslv2_status="OK"
         fi
-	done
+
+        # Is the keylength 128 bits or more?
+        hasMinimumLength 128 $smalestkeylen
+        hasMinimum=$?
+        if [[ $hasMinimum == 0 ]]
+        then
+            red "The minimum length of cipher keys not correct ($smalestkeylen bits)"
+            min_len_status="FAIL"
+        else
+            green "The minimum length of cipher keys is correct ($smalestkeylen bits)"
+            min_len_status="OK"
+        fi
+
+        if [[ $beast_cbc == 1 ]]
+        then
+            red "This host is not protected against BEAST (Uses CBC with TLSv1 or SSLv2,v3)"
+            beast_status="FAIL"
+        else
+            green "This host is protected against BEAST (Does not use CBC with TLSv1 or SSLv2,v3)"
+            beast_status="OK"
+        fi
+
+        searchMD5Algorithms $methods
+        weakMACAlgorithm=$?
+        if [[ $weakMACAlgorithm == 1 ]]
+        then
+            red "This host has a weak MAC algorithm (Using MD5)"
+            md5_mac_status="FAIL"
+        else
+            green "This hosts hasn't a weak MAC algorithm (Not using MD5)"
+            md5_mac_status="OK"
+        fi
+
+        echo "$ip;$min_len_status;$sslv2_status;$beast_status;$md5_mac_status" >> $OUTPUT_FILE
+        
+        #else
+        #    echo "IP $ip is not available now or is filtering out ping requests. Skiping."
+        #fi # if $hostAvailable
+        
+    else # Is not a commentary with "#"
+        echo "Skipping commentary $ip"
+    fi # Is not a commentary
     
-    # Is SSLv2 enabled?
-    containsElement "SSLv2" $ciphers
-    hasSSLv2=$?
-    if [[ $hasSSLv2 == 1 ]]
-    then
-        red "SSLv2 detected"
-        sslv2_status="FAIL"
-    else
-        green "SSLv2 was not detected"
-        sslv2_status="OK"
-    fi
-
-    # Is the keylength 128 bits or more?
-    hasMinimumLength 128 $smalestkeylen
-    hasMinimum=$?
-    if [[ $hasMinimum == 0 ]]
-    then
-        red "The minimum length of cipher keys not correct ($smalestkeylen bits)"
-        min_len_status="FAIL"
-    else
-        green "The minimum length of cipher keys is correct ($smalestkeylen bits)"
-        min_len_status="OK"
-    fi
-
-    if [[ $beast_cbc == 1 ]]
-    then
-        red "This host is not protected against BEAST (Uses CBC with TLSv1 or SSLv2,v3)"
-        beast_status="FAIL"
-    else
-        green "This host is protected against BEAST (Does not use CBC with TLSv1 or SSLv2,v3)"
-        beast_status="OK"
-    fi
-
-    searchMD5Algorithms $methods
-    weakMACAlgorithm=$?
-    if [[ $weakMACAlgorithm == 1 ]]
-    then
-        red "This host has a weak MAC algorithm (Using MD5)"
-        md5_mac_status="FAIL"
-    else
-        green "This hosts hasn't a weak MAC algorithm (Not using MD5)"
-        md5_mac_status="OK"
-    fi
-
     cont=$(( cont+1 ))
-
-    echo "$ip;$min_len_status;$sslv2_status;$beast_status;$md5_mac_status" >> $OUTPUT_FILE
 done
 
 
