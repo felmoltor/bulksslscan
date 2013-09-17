@@ -234,7 +234,7 @@ do
             red "This host is not protected against BEAST (Uses CBC with TLSv1 or SSLv2,v3)"
             beast_status="FAIL"
         else
-            green "This host is protected against BEAST (Does not use CBC with TLSv1 or SSLv2,v3)"
+            green "This host is protected against BEAST (Does not use CBC/CBC3 with TLSv1 or SSLv2,v3)"
             beast_status="OK"
         fi
 
