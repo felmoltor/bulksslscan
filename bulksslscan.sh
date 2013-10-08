@@ -153,7 +153,10 @@ smalestkeylen=9999
 total_ips=$(wc -l $IP_FILE | cut -f1 -d' ')
 cont=1
 beast_cbc=0
-
+min_len_status="<NOT AVAILABLE>"
+sslv2_status="<NOT AVAILABLE>"
+beast_status="<NOT AVAILABLE>"
+md5_mac_status="<NOT AVAILABLE>"
 
 echo "IP;Key Len (>= 128 bits);SSLv2 Disabled;CBC Disabled (SSLv3,v2,TLSv1);MD5 based MAC" > $OUTPUT_FILE
 
@@ -231,7 +234,7 @@ do
 
         if [[ $beast_cbc == 1 ]]
         then
-            red "This host is not protected against BEAST (Uses CBC with TLSv1 or SSLv2,v3)"
+            red "This host is not protected against BEAST (Uses CBC/CBC3 with TLSv1 or SSLv2,v3)"
             beast_status="FAIL"
         else
             green "This host is protected against BEAST (Does not use CBC/CBC3 with TLSv1 or SSLv2,v3)"
