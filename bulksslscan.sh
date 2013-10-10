@@ -21,7 +21,7 @@ RED=$(tput setaf 1)
 
 FORCE_SCAN=0 # If there is already a result file for this IP, scan it again
 RESULTS_DIR="results"
-PING_FIRST=0 # TODO: Ping the IP before sslscan, but only if there is no previous file output of sslscan
+PING_FIRST=1 # Ping the IP before sslscan, but only if there is no previous file output of sslscan
 
 #############
 # FUNCTIONS #
@@ -41,12 +41,16 @@ function yellow() {
     echo -e "$YELLOW$*$NORMAL"
 }
 
+###################
+
 function containsElement () 
 {
     local e
     for e in "${@:2}"; do [[ "$e" == "$1" ]] && return 1; done
     return 0
 }
+
+###################
 
 function hasMinimumLength()
 {
@@ -57,6 +61,8 @@ function hasMinimumLength()
         return 1
     fi
 }
+
+###################
 
 function searchCBCMethod()
 {
@@ -75,6 +81,8 @@ function searchCBCMethod()
     done
     return $cbc_enabled
 }
+
+###################
 
 function searchMD5Algorithms() 
 {
@@ -95,22 +103,49 @@ function searchMD5Algorithms()
    
 }
 
+###################
+
 function isCommandAvailable {
     type -P $1 >/dev/null 2>&1 || { echo >&2 "Program '$1' is not installed. Please install it before executing this script"; exit 1; }
     return 0
 }
 
+###################
+
+function isValidIP()
+{
+    local  ip=$1
+    local  stat=1
+
+    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        OIFS=$IFS
+        IFS='.'
+        ip=($ip)
+        IFS=$OIFS
+        [[ ${ip[0]} -le 255 && ${ip[1]} -le 255 \
+            && ${ip[2]} -le 255 && ${ip[3]} -le 255 ]]
+        stat=$?
+    fi
+    return $stat
+}
+
+###################
+
 function isHostAvailable {
     local available
-    available=0
-    packetLoss=$(ping -c 3 $1 | tail -n2 | head -n1 | awk -F, '{print $3}' | tr -d ' ')
+    error=0
 
-    if [[ $packetLoss == "0%" ]]
-    then
-        available=1
+    pingresponse=$( ping -c 2 $1 -q 2> /dev/null )
+    pingError=$?
+    if [[ $pingError != 0 || ${#pingresponse} == 0 ]];then
+        error=1
+    else
+        packetLoss=$( echo $pingresponse | tail -n2 | head -n1 | awk -F, '{print $3}' | awk -F% '{print $1}' | tr -d ' ' )
+        if [[ $packetLoss != '0' ]];then
+            error=2
+        fi  
     fi
-
-    return $available
+    return $error
 }
 
 ###################
@@ -120,7 +155,6 @@ function isHostAvailable {
 ##########
 
 isCommandAvailable "sslscan"
-#isCommandAvailable "timeout"
 isCommandAvailable "cut"
 isCommandAvailable "grep"
 
@@ -147,36 +181,38 @@ else
     OUTPUT_FILE=$2
 fi
 
-hasSSLv2=0
-hasMinimum=1
-smalestkeylen=9999
 total_ips=$(wc -l $IP_FILE | cut -f1 -d' ')
-cont=1
-beast_cbc=0
-min_len_status="<NOT AVAILABLE>"
-sslv2_status="<NOT AVAILABLE>"
-beast_status="<NOT AVAILABLE>"
-md5_mac_status="<NOT AVAILABLE>"
+cont=0
 
 echo "IP;Key Len (>= 128 bits);SSLv2 Disabled;CBC Disabled (SSLv3,v2,TLSv1);MD5 based MAC" > $OUTPUT_FILE
 
 for ip in `cat $IP_FILE | tr -d ' '`
 do
+    cont=$(( cont+1 ))
+    min_len_status="<NOT AVAILABLE>"
+    sslv2_status="<NOT AVAILABLE>"
+    beast_status="<NOT AVAILABLE>"
+    md5_mac_status="<NOT AVAILABLE>"
+    beast_cbc=0
+    hasSSLv2=0
+    hasMinimum=1
+    smalestkeylen=9999
+
     echo 
 	echo "Scanning $ip ($cont/$total_ips). Please wait..."
     # If this is not a commentary with a '#'
     if [[ ${ip:0:1} != "#" ]]
     then
-        #if [[ -f $RESULTS_DIR/$ip.out.xml ]]
-        # then
-        #    hostAvailable=1
-            # Check if is available by pinging this IP
-        #    if [[ $PING_FIST == 1 ]]
-        #    then
-        #        ip_only=$(echo $ip | sed 's/:.*//g')
-        #        echo "Pinging to $ip_only. Please wait..."
-        #        hostAvailable=$(isHostAvailable $ip_only)
-        #    fi
+        if [[ $PING_FIRST > 0 ]];then
+            isHostAvailable $ip
+            hostAvailable=$?
+            if [[ $hostAvailable != 0 ]];then
+                red "Either the domain doesn't exist or IP is not available now (ICMP echo used). Skipping '$ip'..."
+                echo "$ip;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>" >> $OUTPUT_FILE
+                continue
+            fi
+        fi # IF PING FIRST
+
 
         if [[ -f $RESULTS_DIR/$ip.out.xml ]]
         then
@@ -251,18 +287,10 @@ do
             green "This hosts hasn't a weak MAC algorithm (Not using MD5)"
             md5_mac_status="OK"
         fi
-
         echo "$ip;$min_len_status;$sslv2_status;$beast_status;$md5_mac_status" >> $OUTPUT_FILE
-        
-        #else
-        #    echo "IP $ip is not available now or is filtering out ping requests. Skiping."
-        #fi # if $hostAvailable
         
     else # Is not a commentary with "#"
         echo "Skipping commentary $ip"
     fi # Is not a commentary
     
-    cont=$(( cont+1 ))
 done
-
-
