@@ -45,8 +45,8 @@ function yellow() {
 ###################
 
 function supportTLSv11() {
-    ip=$1
-    port=$2
+    local ip=$1
+    local port=$2
     # This function was extracted from TLSSLed_v1.3 (recognition to Taddong http://www.taddong.com/tools/TLSSLed_v1.3.sh)
     OUTPUT_TLS1_1=$((echo Q; sleep 1) | openssl s_client -tls1_1 -connect $ip:$port 2>&1)
 
@@ -66,8 +66,8 @@ function supportTLSv11() {
 ###################
 
 function supportTLSv12() {
-    ip=$1
-    port=$2
+    local ip=$1
+    local port=$2
     # This function was extracted from TLSSLed_v1.3 (recognition to Taddong http://www.taddong.com/tools/TLSSLed_v1.3.sh)
     OUTPUT_TLS1_2=$((echo Q; sleep 1) | openssl s_client -tls1_2 -connect $ip:$port 2>&1)
 
@@ -191,6 +191,85 @@ function isHostAvailable {
     return $error
 }
 
+function extractSubjectFromFile {
+    sslOutputFile=$1
+    local subject=""
+    if [[ -f $sslOutputFile ]]; then
+        subject=$(grep -E '<subject>.*<\/subject>' $sslOutputFile | sed -r 's/<subject>(.*)<\/subject>/\1/g')
+    fi
+    echo $subject
+}
+
+function extractCNFromSubject {
+    subject=$1
+
+}
+
+function extractIssuerFromFile {
+    sslOutputFile=$1
+    local issuer=""
+    if [[ -f $sslOutputFile ]]; then
+        issuer=$(grep -E '<issuer>.*<\/issuer>' $sslOutputFile | sed -r 's/<issuer>(.*)<\/issuer>/\1/g')
+    fi
+    echo $issuer
+}
+
+function extractVersionFromFile {
+    sslOutputFile=$1
+    local version=""
+    if [[ -f $sslOutputFile ]]; then
+        version=$(grep -E '<version>.*<\/version>' $sslOutputFile | sed -r 's/<version>(.*)<\/version>/\1/g')
+    fi
+    echo $version
+}
+
+
+function extractNotValidAfterFromFile {
+    sslOutputFile=$1
+    local nafter=""
+    if [[ -f $sslOutputFile ]]; then
+        nafter=$(grep -E '<not-valid-after>.*<\/not-valid-after>' $sslOutputFile | sed -r 's/<not-valid-after>(.*)<\/not-valid-after>/\1/g')
+    fi
+    echo $nafter
+}
+
+function extractNotValidBeforeFromFile {
+    sslOutputFile=$1
+    local nbefore=""
+    if [[ -f $sslOutputFile ]]; then
+        nbefore=$(grep -E '<not-valid-before>.*<\/not-valid-before>' $sslOutputFile | sed -r 's/<not-valid-before>(.*)<\/not-valid-before>/\1/g')
+    fi
+    echo $nbefore
+}
+
+function extractSigAlgorithmFromFile {
+    sslOutputFile=$1
+    local sigalg=""
+    if [[ -f $sslOutputFile ]]; then
+        sigalg=$(grep -E '<signature-algorithm>.*<\/signature-algorithm>' $sslOutputFile | sed -r 's/<signature-algorithm>(.*)<\/signature-algorithm>/\1/g')
+    fi
+    echo $sigalg
+}
+
+
+function extractPKAlgorithmFromFile {
+    sslOutputFile=$1
+    local pkalg=""
+    if [[ -f $sslOutputFile ]]; then
+        pkalg=$(grep -E '<pk-algorithm>.*<\/pk-algorithm>' $sslOutputFile | sed -r 's/<pk-algorithm>(.*)<\/pk-algorithm>/\1/g')
+    fi
+    echo $pkalg
+}
+
+function extractPKLengthFromFile {
+    sslOutputFile=$1
+    local pklen=""
+    if [[ -f $sslOutputFile ]]; then
+        pklen=$(grep -E '<pk error=.+ type=.+ bits=.+>' $sslOutputFile | sed -r 's/<pk error=.+ type=.+ bits=\"(.*)\">/\1/g')
+    fi
+    echo $pklen
+}
+
 ###################
 
 ##########
@@ -239,6 +318,17 @@ do
     md5_mac_status="<NOT AVAILABLE>"
     supportTLSv11="<NOT AVAILABLE>"
     supportTLSV12="<NOT AVAILABLE>"
+    certIssuer="<NOT AVAILABLE>"
+    certPKLength="<NOT AVAILABLE>"
+    certPKAlgorithm="<NOT AVAILABLE>"
+    certIssuer="<NOT AVAILABLE>"
+    certSigAlgorithm="<NOT AVAILABLE>"
+    certSubject="<NOT AVAILABLE>"
+    certVersion="<NOT AVAILABLE>"
+    certNotValidAfter="<NOT AVAILABLE>"
+    certNotValidBefore="<NOT AVAILABLE>"
+    certExpired="<NOT AVAILABLE>"
+    certCorrectCN="<NOT AVAILABLE>"
     beast_cbc=0
     hasSSLv2=0
     hasMinimum=1
@@ -254,7 +344,7 @@ do
             hostAvailable=$?
             if [[ $hostAvailable != 0 ]];then
                 red "Either the domain doesn't exist or IP is not available now (ICMP echo used). Skipping '$ip'..."
-                echo "$ip;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>" >> $OUTPUT_FILE
+                echo "$ip;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>" >> $OUTPUT_FILE
                 continue
             fi
         fi # IF PING FIRST
@@ -276,14 +366,51 @@ do
             size=$(ls -l $RESULTS_DIR/$ip.out.xml | awk '{print $5}')
             if [[ size -eq "0" ]]; then
                 red "The program sslscan timed out (more than $SCANTIMEOUT). Skipping this IP..."
-                echo "$ip;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>" >> $OUTPUT_FILE
+                echo "$ip;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>" >> $OUTPUT_FILE
                 continue
             fi
         else
             red "The program sslscan couldn't create the result file. Skipping this IP..."
-            echo "$ip;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>" >> $OUTPUT_FILE
+            echo "$ip;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>" >> $OUTPUT_FILE
             continue
         fi
+
+        # Retrieve certificate info
+        certIssuer=$(extractIssuerFromFile $RESULTS_DIR/$ip.out.xml)
+        certSubject=$(extractSubjectFromFile $RESULTS_DIR/$ip.out.xml)
+        certNotValidAfter=$(extractNotValidAfterFromFile $RESULTS_DIR/$ip.out.xml)
+        certNotValidBefore=$(extractNotValidBeforeFromFile $RESULTS_DIR/$ip.out.xml)
+        certVersion=$(extractVersionFromFile $RESULTS_DIR/$ip.out.xml)
+        certSigAlgorithm=$(extractSigAlgorithmFromFile  $RESULTS_DIR/$ip.out.xml)
+        certPKAlgorithm=$(extractPKAlgorithmFromFile  $RESULTS_DIR/$ip.out.xml)
+        certPKLength=$(extractPKLengthFromFile  $RESULTS_DIR/$ip.out.xml)
+
+        dafter=$(date --date="$certNotValidAfter" +%s)
+        dbefore=$(date --date="$certNotValidBefore" +%s)
+        today=$(date +%s)
+        if [[ $today > $dafter ]]; then
+            certExpired="NOT VALID"
+        elif [[ $today < $dbefore ]]; then
+            certExpired="NOT VALID"
+        else
+            certExpired="VALID"
+        fi
+        if [[ $certExpired = "VALID" ]]; then
+            green "The certificate dates are $certExpired (Not Valid After $certNotValidAfter, Not Valid Before $certNotValidBefore)"
+        else
+            red "The certificate dates are $certExpired (Not Valid After $certNotValidAfter, Not Valid Before $certNotValidBefore)"
+        fi
+
+        if [[ $certIssuer = $certSubject ]]; then
+            red "This certificate is autosigned"
+        fi
+
+        echo "Certificate Issuer: $certIssuer"
+        echo "Certificat Subject: $certSubject"
+        echo "Certificate Version: $certVersion"
+        echo "Signature Algorithm: $certSigAlgorithm"
+        echo "Public Key Algorithm: $certPKAlgorithm"
+        echo "Public Key Length: $certPKLength"
 
         # Seach for cipher protocols accepted
         ciphers=$(grep '<cipher status="accepted" sslversion="' $RESULTS_DIR/$ip.out.xml | cut -f5 -d' ' | cut -f2 -d= | tr -d '"' | sort -u )
