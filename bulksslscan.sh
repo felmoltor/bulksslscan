@@ -43,6 +43,48 @@ function yellow() {
 
 ###################
 
+function supportTLSv11() {
+    ip=$1
+    port=$2
+    # This function was extracted from TLSSLed_v1.3 (recognition to Taddong http://www.taddong.com/tools/TLSSLed_v1.3.sh)
+    OUTPUT_TLS1_1=$((echo Q; sleep 1) | openssl s_client -tls1_1 -connect $ip:$port 2>&1)
+
+    if grep -q DONE <<<$OUTPUT_TLS1_1; then
+        return 1
+    elif grep -q "wrong version number" <<<$OUTPUT_TLS1_1; then
+        return 0
+    elif grep -q "ssl handshake failure" <<<$OUTPUT_TLS1_1; then
+        return 0
+    elif grep -q "unknown option" <<<$OUTPUT_TLS1_1; then
+        return -1
+    else
+        return -1
+    fi
+}
+
+###################
+
+function supportTLSv12() {
+    ip=$1
+    port=$2
+    # This function was extracted from TLSSLed_v1.3 (recognition to Taddong http://www.taddong.com/tools/TLSSLed_v1.3.sh)
+    OUTPUT_TLS1_2=$((echo Q; sleep 1) | openssl s_client -tls1_2 -connect $ip:$port 2>&1)
+
+    if grep -q DONE <<<$OUTPUT_TLS1_2; then
+        return 1
+    elif grep -q "wrong version number" <<<$OUTPUT_TLS1_2; then
+        return 0
+    elif grep -q "ssl handshake failure" <<<$OUTPUT_TLS1_2; then
+        return 0
+    elif grep -q "unknown option" <<<$OUTPUT_TLS1_2; then
+        return -1
+    else
+        return -1
+    fi
+}
+
+###################
+
 function containsElement () 
 {
     local e
@@ -184,7 +226,7 @@ fi
 total_ips=$(wc -l $IP_FILE | cut -f1 -d' ')
 cont=0
 
-echo "IP;Key Len (>= 128 bits);SSLv2 Disabled;CBC Disabled (SSLv3,v2,TLSv1);MD5 based MAC" > $OUTPUT_FILE
+echo "IP;Key Len (>= 128 bits);SSLv2 Disabled;CBC Disabled (SSLv3,v2,TLSv1);MD5 based MAC;TLSv1.1;TLSv1.2" > $OUTPUT_FILE
 
 for ip in `cat $IP_FILE | tr -d ' '`
 do
@@ -193,6 +235,8 @@ do
     sslv2_status="<NOT AVAILABLE>"
     beast_status="<NOT AVAILABLE>"
     md5_mac_status="<NOT AVAILABLE>"
+    supportTLSv11="<NOT AVAILABLE>"
+    supportTLSV12="<NOT AVAILABLE>"
     beast_cbc=0
     hasSSLv2=0
     hasMinimum=1
@@ -287,8 +331,36 @@ do
             green "This hosts hasn't a weak MAC algorithm (Not using MD5)"
             md5_mac_status="OK"
         fi
-        echo "$ip;$min_len_status;$sslv2_status;$beast_status;$md5_mac_status" >> $OUTPUT_FILE
-        
+ 
+        # Check for TLSv1.1 and TLSv1.2
+        supportTLSv11 $ip 443
+        s=$?
+        if [[ $s == 1 ]]; then
+            green "Supports TLSv1.1"
+            supportTLSv11="SUPPORTED"
+        elif [[ $s == 0 ]]; then
+            supportTLSv11="NOT SUPPORTED"
+            red "Does NOT support TLSv1.1"
+        else
+            supportTLSv11="NOT CHECKED"
+            yellow "TLSv1.1 is not present in your OpenSSL and cannot be checked"
+        fi
+        supportTLSv12 $ip 443
+        s=$?
+        if [[ $s == 1 ]]; then
+            green "Supports TLSv1.2"
+            supportTLSv12="SUPPORTED"
+        elif [[ $s == 0 ]]; then
+            supportTLSv12="NOT SUPPORTED"
+            red "Does NOT support TLSv1.2"
+        else
+            supportTLSv12="NOT CHECKED"
+            yellow "TLSv1.2 is not present in your OpenSSL and cannot be checked"
+        fi
+
+        echo "$ip;$min_len_status;$sslv2_status;$beast_status;$md5_mac_status;$supportTLSv11;$supportTLSv12" >> $OUTPUT_FILE
+
+       
     else # Is not a commentary with "#"
         echo "Skipping commentary $ip"
     fi # Is not a commentary
