@@ -22,6 +22,7 @@ RED=$(tput setaf 1)
 FORCE_SCAN=0 # If there is already a result file for this IP, scan it again
 RESULTS_DIR="results"
 PING_FIRST=1 # Ping the IP before sslscan, but only if there is no previous file output of sslscan
+SCANTIMEOUT=60
 
 #############
 # FUNCTIONS #
@@ -199,6 +200,7 @@ function isHostAvailable {
 isCommandAvailable "sslscan"
 isCommandAvailable "cut"
 isCommandAvailable "grep"
+isCommandAvailable "timeout"
 
 # Crea directorio de resultados si no existe ya
 if [[ ! -d $RESULTS_DIR ]]
@@ -218,7 +220,7 @@ fi
 # ARG 2
 if [[ "$2" == "" ]]
 then
-    OUTPUT_FILE="results.csv"
+    OUTPUT_FILE=$(date +%Y%m%d_%H%M%S_output.csv)
 else
     OUTPUT_FILE=$2
 fi
@@ -257,19 +259,32 @@ do
             fi
         fi # IF PING FIRST
 
-
         if [[ -f $RESULTS_DIR/$ip.out.xml ]]
         then
             if [[ $FORCE_SCAN == 1 ]]
             then
-                sslscan --no-failed --xml=$RESULTS_DIR/$ip.out.xml $ip > /dev/null
+                timeout $SCANTIMEOUT sslscan --no-failed --xml=$RESULTS_DIR/$ip.out.xml $ip > /dev/null
             else
                 echo "$ip has been previously scaned. Skipping this scan now."
             fi
         else
-            sslscan --no-failed --xml=$RESULTS_DIR/$ip.out.xml $ip > /dev/null
+            timeout $SCANTIMEOUT sslscan --no-failed --xml=$RESULTS_DIR/$ip.out.xml $ip > /dev/null
         fi
-        
+
+        # If the scan timed out in $SCANTIMEOUT seconds we won t have a result file or it will have size 0
+        if [[ -f $RESULTS_DIR/$ip.out.xml ]]; then
+            size=$(ls -l $RESULTS_DIR/$ip.out.xml | awk '{print $5}')
+            if [[ size -eq "0" ]]; then
+                red "The program sslscan timed out (more than $SCANTIMEOUT). Skipping this IP..."
+                echo "$ip;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>" >> $OUTPUT_FILE
+                continue
+            fi
+        else
+            red "The program sslscan couldn't create the result file. Skipping this IP..."
+            echo "$ip;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>" >> $OUTPUT_FILE
+            continue
+        fi
+
         # Seach for cipher protocols accepted
         ciphers=$(grep '<cipher status="accepted" sslversion="' $RESULTS_DIR/$ip.out.xml | cut -f5 -d' ' | cut -f2 -d= | tr -d '"' | sort -u )
         smalestkeylen=$(grep "<cipher status=\"accepted\" sslversion=\"" $RESULTS_DIR/$ip.out.xml | cut -f6 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u --numeric-sort | head -n1)
