@@ -44,6 +44,13 @@ function yellow() {
 
 ###################
 
+function supportSecureRenegotiation {
+    # openssl s_client -connect <ip>
+    # Send a "R" character to openssl and read the output
+}
+
+###################
+
 function supportTLSv11() {
     local ip=$1
     local port=$2
