@@ -270,6 +270,12 @@ function extractPKLengthFromFile {
     echo $pklen
 }
 
+function extractCNFromFile {
+    sslOutputFile=$1
+    cn=$(grep "<subject>" $sslOutputFile | awk -F"/" '{for (i=1;i<=NF;i++){ if ($i ~ /CN=(.*)[<|\/]?/) {print $i} }}' | cut -f2 -d= | tr -d '<')
+    echo $cn
+}
+
 ###################
 
 ##########
@@ -307,7 +313,7 @@ fi
 total_ips=$(wc -l $IP_FILE | cut -f1 -d' ')
 cont=0
 
-echo "IP;Key Len (>= 128 bits);SSLv2 Disabled;CBC Disabled (SSLv3,v2,TLSv1);MD5 based MAC;TLSv1.1;TLSv1.2" > $OUTPUT_FILE
+echo "IP;Risk Points;Key Len (>= 128 bits);SSLv2 Disabled;CBC Disabled (SSLv3,v2,TLSv1);MD5 based MAC;TLSv1.1;TLSv1.2;Cert. Autosigned;Cert. Valid Dates;Cert. Valid CN; Cert. Valid PK Length" > $OUTPUT_FILE
 
 for ip in `cat $IP_FILE | tr -d ' '`
 do
@@ -329,10 +335,13 @@ do
     certNotValidBefore="<NOT AVAILABLE>"
     certExpired="<NOT AVAILABLE>"
     certCorrectCN="<NOT AVAILABLE>"
+    certCorrectPKLen="<NOT AVAILABLE>"
+    certAutosigned="<NOT AVAILABLE>"
     beast_cbc=0
     hasSSLv2=0
     hasMinimum=1
     smalestkeylen=9999
+    riskPoints=0
 
     echo 
 	echo "Scanning $ip ($cont/$total_ips). Please wait..."
@@ -344,7 +353,7 @@ do
             hostAvailable=$?
             if [[ $hostAvailable != 0 ]];then
                 red "Either the domain doesn't exist or IP is not available now (ICMP echo used). Skipping '$ip'..."
-                echo "$ip;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>" >> $OUTPUT_FILE
+                echo "$ip;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>" >> $OUTPUT_FILE
                 continue
             fi
         fi # IF PING FIRST
@@ -366,12 +375,12 @@ do
             size=$(ls -l $RESULTS_DIR/$ip.out.xml | awk '{print $5}')
             if [[ size -eq "0" ]]; then
                 red "The program sslscan timed out (more than $SCANTIMEOUT). Skipping this IP..."
-                echo "$ip;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>" >> $OUTPUT_FILE
+                echo "$ip;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>" >> $OUTPUT_FILE
                 continue
             fi
         else
             red "The program sslscan couldn't create the result file. Skipping this IP..."
-            echo "$ip;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>" >> $OUTPUT_FILE
+            echo "$ip;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>;<NOT AVAILABLE>" >> $OUTPUT_FILE
             continue
         fi
 
@@ -383,27 +392,8 @@ do
         certVersion=$(extractVersionFromFile $RESULTS_DIR/$ip.out.xml)
         certSigAlgorithm=$(extractSigAlgorithmFromFile  $RESULTS_DIR/$ip.out.xml)
         certPKAlgorithm=$(extractPKAlgorithmFromFile  $RESULTS_DIR/$ip.out.xml)
-        certPKLength=$(extractPKLengthFromFile  $RESULTS_DIR/$ip.out.xml)
-
-        dafter=$(date --date="$certNotValidAfter" +%s)
-        dbefore=$(date --date="$certNotValidBefore" +%s)
-        today=$(date +%s)
-        if [[ $today > $dafter ]]; then
-            certExpired="NOT VALID"
-        elif [[ $today < $dbefore ]]; then
-            certExpired="NOT VALID"
-        else
-            certExpired="VALID"
-        fi
-        if [[ $certExpired = "VALID" ]]; then
-            green "The certificate dates are $certExpired (Not Valid After $certNotValidAfter, Not Valid Before $certNotValidBefore)"
-        else
-            red "The certificate dates are $certExpired (Not Valid After $certNotValidAfter, Not Valid Before $certNotValidBefore)"
-        fi
-
-        if [[ $certIssuer = $certSubject ]]; then
-            red "This certificate is autosigned"
-        fi
+        certPKLength=$(extractPKLengthFromFile $RESULTS_DIR/$ip.out.xml)
+        certCN=$(extractCNFromFile $RESULTS_DIR/$ip.out.xml)
 
         echo "Certificate Issuer: $certIssuer"
         echo "Certificat Subject: $certSubject"
@@ -412,6 +402,47 @@ do
         echo "Public Key Algorithm: $certPKAlgorithm"
         echo "Public Key Length: $certPKLength"
 
+        dafter=$(date --date="$certNotValidAfter" +%s)
+        dbefore=$(date --date="$certNotValidBefore" +%s)
+        today=$(date +%s)
+        if [[ $today > $dafter ]]; then
+            certExpired="FAIL"
+            riskPoints=$(($riskPoints + 1))
+            red "The certificate dates are $certExpired (Not Valid After $certNotValidAfter, Not Valid Before $certNotValidBefore)"
+        elif [[ $today < $dbefore ]]; then
+            certExpired="FAIL"
+            riskPoints=$(($riskPoints + 1))
+            red "The certificate dates are $certExpired (Not Valid After $certNotValidAfter, Not Valid Before $certNotValidBefore)"
+        else
+            certExpired="OK"
+            green "The certificate dates are $certExpired (Not Valid After $certNotValidAfter, Not Valid Before $certNotValidBefore)"
+        fi
+   
+        if [[ $certIssuer = $certSubject ]]; then
+            certAutosigned="FAIL"
+            riskPoints=$(($riskPoints + 1))
+            red "This certificate is autosigned"
+        else
+            certAutosigned="OK"
+        fi
+        
+        if [[ $certCN = $ip ]]; then
+            certCorrectCN="OK"
+            green "Certificate CN agree with the visited address ($certCN == $ip)"
+        else
+            certCorrectCN="FAIL"
+            riskPoints=$(($riskPoints + 1))
+            red "Certificate CN does not agree with the visited address ($certCN != $ip)" 
+        fi
+
+        if [[ $certPKLength < 2048 ]]; then
+            certCorrectPKLen="FAIL"
+            riskPoints=$(($riskPoints + 1))
+            red "Certificat Public Key length is smaller than 2048"
+        else
+            certCorrectPKLen="OK"
+            green "Certificate Public Key length is 2048 or higher"
+        fi
         # Seach for cipher protocols accepted
         ciphers=$(grep '<cipher status="accepted" sslversion="' $RESULTS_DIR/$ip.out.xml | cut -f5 -d' ' | cut -f2 -d= | tr -d '"' | sort -u )
         smalestkeylen=$(grep "<cipher status=\"accepted\" sslversion=\"" $RESULTS_DIR/$ip.out.xml | cut -f6 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u --numeric-sort | head -n1)
@@ -419,7 +450,7 @@ do
         # For each cipher, show the smaller key length accepted by the server
         for cipher in $ciphers
         do
-            echo -n " Smaller key lengt for cipher '$cipher': "
+            echo -n "Smaller key lengt for cipher '$cipher': "
             grep "<cipher status=\"accepted\" sslversion=\"$cipher" $RESULTS_DIR/$ip.out.xml | cut -f6 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u --numeric-sort | head -n1
             methods=$(grep "<cipher status=\"accepted\" sslversion=\"$cipher" $RESULTS_DIR/$ip.out.xml | cut -f7 -d' ' | cut -f2 -d'=' | tr -d '"' | sort -u)
             # If is TLSV1 or SSLv3 we shouldnt accept CBC ciphers
@@ -436,6 +467,7 @@ do
         if [[ $hasSSLv2 == 1 ]]
         then
             red "SSLv2 detected"
+            riskPoints=$(($riskPoints + 1))
             sslv2_status="FAIL"
         else
             green "SSLv2 was not detected"
@@ -448,6 +480,7 @@ do
         if [[ $hasMinimum == 0 ]]
         then
             red "The minimum length of cipher keys not correct ($smalestkeylen bits)"
+            riskPoints=$(($riskPoints + 1))
             min_len_status="FAIL"
         else
             green "The minimum length of cipher keys is correct ($smalestkeylen bits)"
@@ -457,6 +490,7 @@ do
         if [[ $beast_cbc == 1 ]]
         then
             red "This host is not protected against BEAST (Uses CBC/CBC3 with TLSv1 or SSLv2,v3)"
+            riskPoints=$(($riskPoints + 1))
             beast_status="FAIL"
         else
             green "This host is protected against BEAST (Does not use CBC/CBC3 with TLSv1 or SSLv2,v3)"
@@ -468,6 +502,7 @@ do
         if [[ $weakMACAlgorithm == 1 ]]
         then
             red "This host has a weak MAC algorithm (Using MD5)"
+            riskPoints=$(($riskPoints + 1))
             md5_mac_status="FAIL"
         else
             green "This hosts hasn't a weak MAC algorithm (Not using MD5)"
@@ -482,6 +517,7 @@ do
             supportTLSv11="SUPPORTED"
         elif [[ $s == 0 ]]; then
             supportTLSv11="NOT SUPPORTED"
+            riskPoints=$(($riskPoints + 1))
             red "Does NOT support TLSv1.1"
         else
             supportTLSv11="NOT CHECKED"
@@ -494,13 +530,14 @@ do
             supportTLSv12="SUPPORTED"
         elif [[ $s == 0 ]]; then
             supportTLSv12="NOT SUPPORTED"
+            riskPoints=$(($riskPoints + 1))
             red "Does NOT support TLSv1.2"
         else
             supportTLSv12="NOT CHECKED"
             yellow "TLSv1.2 is not present in your OpenSSL and cannot be checked"
         fi
 
-        echo "$ip;$min_len_status;$sslv2_status;$beast_status;$md5_mac_status;$supportTLSv11;$supportTLSv12" >> $OUTPUT_FILE
+        echo "$ip;$riskPoints;$min_len_status;$sslv2_status;$beast_status;$md5_mac_status;$supportTLSv11;$supportTLSv12;$certAutosigned;$certExpired;$certCorrectCN;$certCorrectPKLen" >> $OUTPUT_FILE
 
        
     else # Is not a commentary with "#"
